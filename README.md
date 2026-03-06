@@ -210,7 +210,7 @@ YOUR_MAPBOX_TOKEN
 
 
 inside `frontend/index.html`.
-
+inside 'backend-springboot/resources/application.properties'
 ---
 
 ## 📊 Dataset
