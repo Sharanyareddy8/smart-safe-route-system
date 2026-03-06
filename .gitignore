@@ -1,0 +1,15 @@
+# Java
+target/
+*.class
+*.jar
+
+# IntelliJ
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db

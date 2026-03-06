@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Smart Safe Route</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+
+<script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+
+<style>
+body { margin:0; padding:0; }
+#map { position:absolute; top:0; bottom:0; width:100%; }
+
+.controls {
+    position:absolute;
+    top:10px;
+    left:10px;
+    background:white;
+    padding:12px;
+    z-index:1;
+    border-radius:8px;
+    box-shadow:0 4px 10px rgba(0,0,0,0.2);
+}
+
+select, button {
+    margin:5px 0;
+    width:220px;
+    padding:6px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="controls">
+    <select id="sourceSelect"></select><br>
+    <select id="destSelect"></select><br>
+    <select id="hourSelect"></select><br>
+    <button onclick="loadRoute()">Show Safest Route</button>
+</div>
+
+<div id="map"></div>
+
+<script>
+
+mapboxgl.accessToken = "YOUR_MAPBOX_TOKEN";
+const map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/streets-v11',
+    center: [78.4482, 17.4375],
+    zoom: 11
+});
+
+let startMarker = null;
+let endMarker = null;
+let locations = {};
+
+// ---------------- LOAD LOCATIONS ----------------
+async function loadLocations() {
+
+    const res = await fetch("http://localhost:8080/api/locations");
+    locations = await res.json();
+
+    const sourceSelect = document.getElementById("sourceSelect");
+    const destSelect = document.getElementById("destSelect");
+
+    sourceSelect.innerHTML = "<option value=''>Select Source</option>";
+    destSelect.innerHTML = "<option value=''>Select Destination</option>";
+
+    Object.keys(locations).forEach(name => {
+        sourceSelect.add(new Option(name, name));
+        destSelect.add(new Option(name, name));
+    });
+}
+loadLocations();
+
+// ---------------- LOAD HOURS ----------------
+function loadHours() {
+    const hourSelect = document.getElementById("hourSelect");
+
+    for (let i = 0; i < 24; i++) {
+        const label = (i < 10 ? "0" + i : i) + ":00";
+        hourSelect.add(new Option(label, i));
+    }
+
+    hourSelect.value = new Date().getHours();
+}
+loadHours();
+
+// ---------------- REMOVE OLD ROUTES ----------------
+function clearRoutes() {
+    const style = map.getStyle();
+    if (!style) return;
+
+    style.layers?.forEach(layer => {
+        if (layer.id.startsWith("route-") && map.getLayer(layer.id)) {
+            map.removeLayer(layer.id);
+        }
+    });
+
+    Object.keys(style.sources || {}).forEach(source => {
+        if (source.startsWith("route-") && map.getSource(source)) {
+            map.removeSource(source);
+        }
+    });
+}
+
+// ---------------- LOAD ROUTE ----------------
+async function loadRoute() {
+
+    try {
+
+        const sourceName = document.getElementById("sourceSelect").value;
+        const destName = document.getElementById("destSelect").value;
+        const hour = document.getElementById("hourSelect").value;
+
+        if (!sourceName || !destName) {
+            alert("Select both locations");
+            return;
+        }
+
+        const [sourceLat, sourceLon] = locations[sourceName];
+        const [destLat, destLon] = locations[destName];
+
+        // Remove markers
+        if (startMarker) startMarker.remove();
+        if (endMarker) endMarker.remove();
+
+        // Add markers
+        startMarker = new mapboxgl.Marker({color:"green"})
+            .setLngLat([sourceLon, sourceLat])
+            .setPopup(new mapboxgl.Popup().setText(sourceName))
+            .addTo(map);
+
+        endMarker = new mapboxgl.Marker({color:"red"})
+            .setLngLat([destLon, destLat])
+            .setPopup(new mapboxgl.Popup().setText(destName))
+            .addTo(map);
+
+        clearRoutes();
+
+        // 🔥 CALL BACKEND
+        const safeRes = await fetch("http://localhost:8080/api/safe-route", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({
+                sourceName,
+                destName,
+                hour: parseInt(hour)
+            })
+        });
+
+        if (!safeRes.ok) {
+            alert("Backend error");
+            return;
+        }
+
+        const safeData = await safeRes.json();
+
+        // 🔥 CALL MAPBOX FOR DRAWING
+        const routeRes = await fetch(
+            `https://api.mapbox.com/directions/v5/mapbox/driving/`
+            + `${sourceLon},${sourceLat};${destLon},${destLat}`
+            + `?geometries=geojson&alternatives=true&access_token=${mapboxgl.accessToken}`
+        );
+
+        const routeData = await routeRes.json();
+        const bounds = new mapboxgl.LngLatBounds();
+
+        routeData.routes.forEach((route, index) => {
+
+            const isSafe = index === safeData.safestRouteIndex;
+
+            map.addSource("route-" + index, {
+                type: "geojson",
+                data: {
+                    type: "Feature",
+                    geometry: route.geometry
+                }
+            });
+
+            map.addLayer({
+                id: "route-" + index,
+                type: "line",
+                source: "route-" + index,
+                paint: {
+                    "line-color": isSafe ? "#00C853" : "#FF0000",
+                    "line-width": isSafe ? 7 : 4,
+                    "line-opacity": isSafe ? 1 : 0.6
+                }
+            });
+
+            route.geometry.coordinates.forEach(coord => bounds.extend(coord));
+        });
+
+        map.fitBounds(bounds, {padding:60});
+
+    } catch (err) {
+        console.error(err);
+        alert("Something went wrong");
+    }
+}
+
+</script>
+</body>
+</html>
